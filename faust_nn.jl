@@ -1,5 +1,5 @@
-import Pkg; Pkg.add(["CUDA", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
-import CUDA
+import Pkg; Pkg.add(["BSON", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
+import BSON
 import DSP
 import FFTW
 import FileIO
@@ -9,32 +9,37 @@ import LibSndFile
 
 audio = FileIO.load("hum.wav")
 
-sample_len = 512
-n_clips = size(audio, 1) ÷ sample_len
-ts = 1:sample_len:sample_len * n_clips
-xs = reduce(vcat, [audio[t:t+sample_len] for t in ts]) |> Flux.gpu
-ys = xs
+samples = size(audio, 1)
+dur = samples / audio.samplerate
 
-enc = Flux.Chain(
-    Flux.Dense(sample_len, sample_len >> 1, tanh),
-    Flux.Dense(sample_len >> 1, sample_len >> 2, tanh),
-)
-dec = Flux.Chain(
-    Flux.Dense(sample_len >> 2, sample_len >> 1, tanh),
-    Flux.Dense(sample_len >> 1, sample_len, tanh),
-)
+ts = (1:samples) / samples
+n_fs = 128
+fs = 1:n_fs
+augment(t) = vcat([t], sin.(2*pi*fs*t))
+xs = reduce(hcat, augment.(ts))
+ys = convert(Vector{Float32}, audio[:, 1])
 
-model = Flux.Chain(enc, dec) |> Flux.gpu
+n = 1 + n_fs
+h = 256
+
+m = Flux.Chain(
+    Flux.Dense(n, h, tanh),
+    Flux.Dense(h, 1, tanh),
+)
 
 opt = Flux.ADAM()
 
-loss(x, y) = Flux.mse(vec(m(x)), y)
+loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
+
+test_batch = Flux.Data.DataLoader((xs, ys), batchsize=256)
 
 i = 0
 function evalcb()
-    y_pred = vec(m(xs))
-    loss_total = Flux.mse(y_pred, xs)
+    loss_total = 0.0
+    for d in test_batch
+        loss_total += loss(d...)
+    end
     if i % 1 == 0
         Flux.@show((i, loss_total))
     end
@@ -63,6 +68,7 @@ layer_sizes = vcat([size(layer.W, 2) for layer in m.layers], [size(last(m.layers
 layer_sizes_str = join(layer_sizes, ", ")
 faust_nls = Dict(
     :tanh => "ma.tanh",
+    :relu => "\\(x).(x * (x > 0))"
     :σ => "\\(x).(1.0 / (1.0 + ma.exp(-x)))",
 )
 layer_nls = join(["  nl($(i-1)) = $(faust_nls[Symbol(layer.σ)]);\n" for (i, layer) in enumerate(dec.layers)])
@@ -92,7 +98,9 @@ faust_code = """
 import("stdfaust.lib");
 
 $faust_nn
-process = no.multinoise($(first(layer_sizes))) : nn;
+
+augment(t) = t, par(f, $n_fs, sin(2*ma.PI*f*t));
+process = os.lf_sawpos(1.0 / $dur) : augment : nn <: _, _;
 """
 
 program_name = "faust_nn"
