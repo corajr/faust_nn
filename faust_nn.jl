@@ -1,5 +1,7 @@
-import Pkg; Pkg.add(["BSON", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
+import Pkg; Pkg.add(["BSON", "CUDA", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
 import BSON
+import CUDA
+import Dates
 import DSP
 import FFTW
 import FileIO
@@ -13,19 +15,19 @@ samples = size(audio, 1)
 dur = samples / audio.samplerate
 
 ts = (1:samples) / samples
-n_fs = 128
+n_fs = 256
 fs = 1:n_fs
 augment(t) = vcat([t], sin.(2*pi*fs*t))
-xs = reduce(hcat, augment.(ts))
-ys = convert(Vector{Float32}, audio[:, 1])
+xs = reduce(hcat, augment.(ts)) |> Flux.gpu
+ys = convert(Vector{Float32}, audio[:, 1]) |> Flux.gpu
 
 n = 1 + n_fs
-h = 256
+h = n_fs * 2
 
 m = Flux.Chain(
     Flux.Dense(n, h, tanh),
     Flux.Dense(h, 1, tanh),
-)
+) |> Flux.gpu
 
 opt = Flux.ADAM()
 
@@ -40,8 +42,11 @@ function evalcb()
     for d in test_batch
         loss_total += loss(d...)
     end
-    if i % 1 == 0
-        Flux.@show((i, loss_total))
+    Flux.@show((i, loss_total))
+    if i % 10 == 0
+        ts = Dates.value(Dates.now()) - Dates.UNIXEPOCH
+        m_cpu = Flux.cpu(m)
+        BSON.@save "model-$ts.bson" m_cpu opt
     end
     global i += 1
 end
