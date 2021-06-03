@@ -73,7 +73,7 @@ layer_sizes = vcat([size(layer.W, 2) for layer in m.layers], [size(last(m.layers
 layer_sizes_str = join(layer_sizes, ", ")
 faust_nls = Dict(
     :tanh => "ma.tanh",
-    :relu => "\\(x).(x * (x > 0))"
+    :relu => "\\(x).(x * (x > 0))",
     :σ => "\\(x).(1.0 / (1.0 + ma.exp(-x)))",
 )
 layer_nls = join(["  nl($(i-1)) = $(faust_nls[Symbol(layer.σ)]);\n" for (i, layer) in enumerate(dec.layers)])
