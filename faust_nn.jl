@@ -39,6 +39,11 @@ ps = Flux.params(m)
 
 test_batch = Flux.Data.DataLoader((xs, ys), batchsize=256)
 
+ts = () -> Dates.value(Dates.now()) - Dates.UNIXEPOCH
+
+run_started = ts()
+Base.Filesystem.mkpath("checkpoints")
+
 i = 0
 function evalcb()
     loss_total = 0.0
@@ -47,9 +52,8 @@ function evalcb()
     end
     Flux.@show((i, loss_total))
     if i % 10 == 0
-        ts = Dates.value(Dates.now()) - Dates.UNIXEPOCH
         m_cpu = Flux.cpu(m)
-        BSON.@save "model-$ts.bson" m_cpu opt
+        BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
     end
     global i += 1
 end
@@ -78,9 +82,15 @@ for (layer_idx, layer) in enumerate(m.layers)
     println(nls_buffer, "nl($(layer_idx-1)) = $(faust_nls[Symbol(layer.σ)]);\n")
 end
 
+for buf in [weight_buffer, bias_buffer, nls_buffer]
+    seekstart(buf)
+    println(countlines(buf))
+end
+
 weights = String(take!(weight_buffer));
 biases = String(take!(bias_buffer));
 layer_nls = String(take!(nls_buffer));
+
 layer_sizes = vcat([size(layer.W, 2) for layer in m.layers], [size(last(m.layers).W, 1)])
 layer_sizes_str = join(layer_sizes, ", ")
 
@@ -123,10 +133,8 @@ close(io)
 dsp_path = Base.Filesystem.abspath(dsp_fname)
 faust_path = "C:\\Program Files\\Faust\\bin"
 cd(() -> (
-    println(readdir("."));
-    cmd = `bash.exe -c faust2sndfile $dsp_path`;
-    run(cmd);
+    # println(readdir("."));
+    run(`bash.exe -c faust2sndfile $dsp_path`);
 ), faust_path)   
 
-gen_audio_cmd = `bash.exe -c /mnt/c/Users/coraj/Documents/faust_nn/$program_name hum_pred.wav`;
-run(gen_audio_cmd, wait=true)
+run(`bash.exe -c "/mnt/c/Users/coraj/Documents/faust_nn/$program_name hum_pred.wav"`, wait=true)
