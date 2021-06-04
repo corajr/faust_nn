@@ -34,29 +34,30 @@ mutable struct Model
     ys
     ps
     loss
+    opt
 end
 
 function chord_model()
-xs = reduce(hcat, [[0, 0,], [0, 1], [1, 0], [1, 1]]) |> Flux.gpu
+xs = reduce(hcat, [[i / 12] for i in 0:11]) |> Flux.gpu
 
 #        0  1  2  3  4  5  6  7  8  9  t  e
 major = [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0]
 
-ys = reduce(hcat, [circshift(major, 7*i) for i in 0:3]) |> Flux.gpu
+ys = reduce(hcat, [circshift(major, 7*i) for i in 0:11]) |> Flux.gpu
 
 h = 12
 m = Flux.Chain(
-	Flux.Dense(2, 12, Flux.σ),
+	Flux.Dense(1, h, Flux.σ),
+	Flux.Dense(h, 12, Flux.σ),
 ) |> Flux.gpu
 
 loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
-Model(m, xs, ys, ps, loss)
+opt = Flux.ADAM()
+Model(m, xs, ys, ps, loss, opt)
 end
 
 function train_model(model)
-opt = Flux.ADAM()
-
 ts = () -> Dates.value(Dates.now()) - Dates.UNIXEPOCH
 
 run_started = ts()
@@ -81,7 +82,8 @@ function evalcb()
 end
 
 d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4)
-Flux.@epochs 10000 Flux.train!(model.loss, model.ps, d_batch, opt, cb = evalcb)
+Flux.@epochs 1000 Flux.train!(model.loss, model.ps, IterTools.ncycle(d_batch, 100), model.opt, cb = evalcb)
+println("loss: $(model.loss(model.xs, model.ys))")
 end
 
 faust_nls = Dict(

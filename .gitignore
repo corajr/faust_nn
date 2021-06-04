@@ -2,3 +2,4 @@ faust_nn.dsp
 faust_nn
 checkpoints/
 faust_nn
+hum_pred.wav
