@@ -8,11 +8,11 @@ import FFTW
 import FileIO
 import Flux
 import IterTools
-try
-    import LibSndFile
-catch
-    # ignore double registration of OGG format.
-end
+# try
+#     import LibSndFile
+# catch e
+#     # ignore double registration of OGG format.
+# end
 
 # include("harmonic_loss_fns.jl")
 
@@ -51,7 +51,7 @@ m = Flux.Chain(
 
 loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
-Model(m, xs, ys, ps, opt)
+Model(m, xs, ys, ps, loss)
 end
 
 function train_model(model)
@@ -62,20 +62,26 @@ ts = () -> Dates.value(Dates.now()) - Dates.UNIXEPOCH
 run_started = ts()
 Base.Filesystem.mkpath("checkpoints")
 
+checkpoint_period = 1000
 i = 0
-function evalcb()
-    loss_total = loss(model.xs, model.ys)
+
+function display_loss()
+    loss_total = model.loss(model.xs, model.ys)
     Flux.@show((i, loss_total))
-    if i % (4*1000)== 0
+end
+throttled_cb = Flux.throttle(display_loss, 5)
+
+function evalcb()
+    throttled_cb()
+    if i % checkpoint_period == 0
         m_cpu = Flux.cpu(model.m)
         BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
     end
-    global i += 1
+    i += 1
 end
-throttled_cb = Flux.throttle(evalcb, 5)
 
 d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4)
-Flux.@epochs 10000 Flux.train!(loss, ps, d_batch, opt, cb = throttled_cb)
+Flux.@epochs 10000 Flux.train!(model.loss, model.ps, d_batch, opt, cb = evalcb)
 end
 
 faust_nls = Dict(
