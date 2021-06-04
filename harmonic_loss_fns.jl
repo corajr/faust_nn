@@ -33,7 +33,7 @@ function mag_spec(x, n = 256)
     hann = DSP.Windows.hanning(n, zerophase=true)
     hop_size = div(n, 2)
     n_pos_freqs = div(n, 2) + 1
-    n_hops = div(size(x, 1), hop_size)
+    n_hops = div(size(x, 1), hop_size) - 1
     spec = zeros(n_hops, n_pos_freqs)
     for i=1:n_hops
         offset = ((i - 1) * hop_size) + 1

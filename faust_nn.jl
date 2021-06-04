@@ -12,32 +12,37 @@ try
 catch
     # ignore double registration of OGG format.
 end
-audio = FileIO.load("hum.wav")
 
-samples = size(audio, 1)
-dur = samples / audio.samplerate
+# include("harmonic_loss_fns.jl")
 
-ts = (1:samples) / samples
-n_fs = 16
-fs = 2 .^ (0:n_fs - 1)
-augment(t) = vcat([t], sin.(2*pi*fs*t))
-xs = reduce(hcat, augment.(ts)) |> Flux.gpu
-ys = convert(Vector{Float32}, audio[:, 1]) |> Flux.gpu
+# n_fft = 256
+# audio = FileIO.load("hum.wav")
+# spec = mag_spec(audio, n_fft)
 
-n = 1 + n_fs
-h = n_fs * 2
+# ts = ((1:size(spec, 1)) * div(n_fft, 2)) / audio.samplerate
+# n_fs = 12
+# midikey2hz(mk) = 440.0 * 2^((mk-69.0)/12.0);
+# fs = midikey2hz.(60:60+n_fs-1)
+# oscillators = [sum(sin.(2*pi*fs*t)) for t in ts]
 
+CUDA.allowscalar(false)
+
+xs = reduce(hcat, [[0, 0,], [0, 1], [1, 0], [1, 1]]) |> Flux.gpu
+
+#        0  1  2  3  4  5  6  7  8  9  t  e
+major = [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0]
+
+ys = reduce(hcat, [circshift(major, 7*i) for i in 0:3]) |> Flux.gpu
+
+h = 12
 m = Flux.Chain(
-    Flux.Dense(n, h, tanh),
-    Flux.Dense(h, 1, tanh),
+    Flux.Dense(2, 12, Flux.σ),
 ) |> Flux.gpu
 
 opt = Flux.ADAM()
 
 loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
-
-test_batch = Flux.Data.DataLoader((xs, ys), batchsize=256)
 
 ts = () -> Dates.value(Dates.now()) - Dates.UNIXEPOCH
 
@@ -46,12 +51,9 @@ Base.Filesystem.mkpath("checkpoints")
 
 i = 0
 function evalcb()
-    loss_total = 0.0
-    for d in test_batch
-        loss_total += loss(d...)
-    end
+    loss_total = loss(xs, ys)
     Flux.@show((i, loss_total))
-    if i % 10 == 0
+    if i % (4*1000)== 0
         m_cpu = Flux.cpu(m)
         BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
     end
@@ -59,20 +61,21 @@ function evalcb()
 end
 throttled_cb = Flux.throttle(evalcb, 5)
 
-d_batch = Flux.Data.DataLoader((xs, ys), batchsize=256, shuffle=true)
-Flux.@epochs 10 Flux.train!(loss, ps, d_batch, opt, cb = throttled_cb)
+d_batch = Flux.Data.DataLoader((xs, ys), batchsize = 4)
+Flux.@epochs 10000 Flux.train!(loss, ps, d_batch, opt, cb = throttled_cb)
 
 faust_nls = Dict(
     :tanh => "ma.tanh",
     :relu => "\\(x).(x * (x > 0))",
-    :σ => "\\(x).(1.0 / (1.0 + ma.exp(-x)))",
+    :σ => "\\(x).(1.0 / (1.0 + exp(-x)))",
 )
 
 weight_buffer = IOBuffer()
 bias_buffer = IOBuffer()
 nls_buffer = IOBuffer()
 
-for (layer_idx, layer) in enumerate(m.layers)
+m_cpu = Flux.cpu(m)
+for (layer_idx, layer) in enumerate(m_cpu.layers)
     for (I, v) in pairs(IndexCartesian(), layer.W)
         println(weight_buffer, "w($(layer_idx - 1), $(I[2] - 1), $(I[1] - 1)) = $v;")
     end
@@ -120,8 +123,8 @@ import("stdfaust.lib");
 
 $faust_nn
 
-augment(t) = t, par(f, $n_fs, sin(2*ma.PI*f*t));
-process = os.lf_sawpos(1.0 / $dur) : augment : nn <: _, _;
+notes = par(i, 12, _ * (1/12) * os.osc(ba.midikey2hz(60 + i))) :> _;
+process = checkbox("2"), checkbox("1") : nn : notes <: _, _;
 """;
 
 program_name = "faust_nn"
