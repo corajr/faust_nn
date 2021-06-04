@@ -1,0 +1,4 @@
+name = "faust_nn"
+uuid = "a38e281c-adda-4243-95a8-23461931beb1"
+authors = ["Cora Johnson-Roberson <cora.johnson.roberson@gmail.com>"]
+version = "0.1.0"
