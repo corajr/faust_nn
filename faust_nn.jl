@@ -1,4 +1,4 @@
-import Pkg; Pkg.add(["BSON", "CUDA", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
+# import Pkg; Pkg.add(["BSON", "CUDA", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
 import BSON
 import CUDA
 import Dates
@@ -7,16 +7,19 @@ import FFTW
 import FileIO
 import Flux
 import IterTools
-import LibSndFile
-
+try
+    import LibSndFile
+catch
+    # ignore double registration of OGG format.
+end
 audio = FileIO.load("hum.wav")
 
 samples = size(audio, 1)
 dur = samples / audio.samplerate
 
 ts = (1:samples) / samples
-n_fs = 256
-fs = 1:n_fs
+n_fs = 16
+fs = 2 .^ (0:n_fs - 1)
 augment(t) = vcat([t], sin.(2*pi*fs*t))
 xs = reduce(hcat, augment.(ts)) |> Flux.gpu
 ys = convert(Vector{Float32}, audio[:, 1]) |> Flux.gpu
@@ -55,8 +58,15 @@ throttled_cb = Flux.throttle(evalcb, 5)
 d_batch = Flux.Data.DataLoader((xs, ys), batchsize=256, shuffle=true)
 Flux.@epochs 10 Flux.train!(loss, ps, d_batch, opt, cb = throttled_cb)
 
+faust_nls = Dict(
+    :tanh => "ma.tanh",
+    :relu => "\\(x).(x * (x > 0))",
+    :σ => "\\(x).(1.0 / (1.0 + ma.exp(-x)))",
+)
+
 weight_buffer = IOBuffer()
 bias_buffer = IOBuffer()
+nls_buffer = IOBuffer()
 
 for (layer_idx, layer) in enumerate(m.layers)
     for (I, v) in pairs(IndexCartesian(), layer.W)
@@ -65,18 +75,14 @@ for (layer_idx, layer) in enumerate(m.layers)
     for (I, v) in pairs(IndexCartesian(), layer.b)
         println(bias_buffer, "b($(layer_idx - 1), $(I[1] - 1)) = $v;")
     end
+    println(nls_buffer, "nl($(layer_idx-1)) = $(faust_nls[Symbol(layer.σ)]);\n")
 end
 
-weights = String(take!(weight_buffer))
-biases = String(take!(bias_buffer))
+weights = String(take!(weight_buffer));
+biases = String(take!(bias_buffer));
+layer_nls = String(take!(nls_buffer));
 layer_sizes = vcat([size(layer.W, 2) for layer in m.layers], [size(last(m.layers).W, 1)])
 layer_sizes_str = join(layer_sizes, ", ")
-faust_nls = Dict(
-    :tanh => "ma.tanh",
-    :relu => "\\(x).(x * (x > 0))",
-    :σ => "\\(x).(1.0 / (1.0 + ma.exp(-x)))",
-)
-layer_nls = join(["  nl($(i-1)) = $(faust_nls[Symbol(layer.σ)]);\n" for (i, layer) in enumerate(dec.layers)])
 
 faust_nn = """
 layerSizes = $layer_sizes_str;
@@ -97,7 +103,7 @@ with {
   nonlinearities(m) = par(n, N(m+1), nl(m));
 $layer_nls
 };
-"""
+""";
 
 faust_code = """
 import("stdfaust.lib");
@@ -106,7 +112,7 @@ $faust_nn
 
 augment(t) = t, par(f, $n_fs, sin(2*ma.PI*f*t));
 process = os.lf_sawpos(1.0 / $dur) : augment : nn <: _, _;
-"""
+""";
 
 program_name = "faust_nn"
 dsp_fname = "$program_name.dsp"
@@ -114,8 +120,13 @@ io = open(dsp_fname, "w")
 write(io, faust_code)
 close(io)
 
-cmd = `faust2sndfile $dsp_fname`  
-run(cmd)
+dsp_path = Base.Filesystem.abspath(dsp_fname)
+faust_path = "C:\\Program Files\\Faust\\bin"
+cd(() -> (
+    println(readdir("."));
+    cmd = `bash.exe -c faust2sndfile $dsp_path`;
+    run(cmd);
+), faust_path)   
 
-gen_audio_cmd = `./$program_name hum.wav hum_pred.wav`
-run(gen_audio_cmd)
+gen_audio_cmd = `bash.exe -c /mnt/c/Users/coraj/Documents/faust_nn/$program_name hum_pred.wav`;
+run(gen_audio_cmd, wait=true)
