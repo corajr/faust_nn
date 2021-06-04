@@ -65,14 +65,14 @@ Base.Filesystem.mkpath("checkpoints")
 checkpoint_period = 1000
 i = 0
 
-function display_loss()
-    loss_total = model.loss(model.xs, model.ys)
+function display_loss(loss_total)
     Flux.@show((i, loss_total))
 end
 throttled_cb = Flux.throttle(display_loss, 5)
 
 function evalcb()
-    throttled_cb()
+    loss_total = model.loss(model.xs, model.ys)
+    throttled_cb(loss_total)
     if i % checkpoint_period == 0
         m_cpu = Flux.cpu(model.m)
         BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
