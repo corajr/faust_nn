@@ -1,4 +1,5 @@
-# import Pkg; Pkg.add(["BSON", "CUDA", "DSP", "FFTW", "FileIO", "Flux", "IterTools", "LibSndFile"])
+module FaustNN
+
 import BSON
 import CUDA
 import Dates
@@ -27,6 +28,15 @@ end
 
 CUDA.allowscalar(false)
 
+mutable struct Model
+    m
+    xs
+    ys
+    ps
+    loss
+end
+
+function chord_model()
 xs = reduce(hcat, [[0, 0,], [0, 1], [1, 0], [1, 1]]) |> Flux.gpu
 
 #        0  1  2  3  4  5  6  7  8  9  t  e
@@ -36,13 +46,16 @@ ys = reduce(hcat, [circshift(major, 7*i) for i in 0:3]) |> Flux.gpu
 
 h = 12
 m = Flux.Chain(
-    Flux.Dense(2, 12, Flux.σ),
+	Flux.Dense(2, 12, Flux.σ),
 ) |> Flux.gpu
-
-opt = Flux.ADAM()
 
 loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
+Model(m, xs, ys, ps, opt)
+end
+
+function train_model(model)
+opt = Flux.ADAM()
 
 ts = () -> Dates.value(Dates.now()) - Dates.UNIXEPOCH
 
@@ -51,18 +64,19 @@ Base.Filesystem.mkpath("checkpoints")
 
 i = 0
 function evalcb()
-    loss_total = loss(xs, ys)
+    loss_total = loss(model.xs, model.ys)
     Flux.@show((i, loss_total))
     if i % (4*1000)== 0
-        m_cpu = Flux.cpu(m)
+        m_cpu = Flux.cpu(model.m)
         BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
     end
     global i += 1
 end
 throttled_cb = Flux.throttle(evalcb, 5)
 
-d_batch = Flux.Data.DataLoader((xs, ys), batchsize = 4)
+d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4)
 Flux.@epochs 10000 Flux.train!(loss, ps, d_batch, opt, cb = throttled_cb)
+end
 
 faust_nls = Dict(
     :tanh => "ma.tanh",
@@ -70,11 +84,12 @@ faust_nls = Dict(
     :σ => "\\(x).(1.0 / (1.0 + exp(-x)))",
 )
 
+function gen_faust_code(model)
 weight_buffer = IOBuffer()
 bias_buffer = IOBuffer()
 nls_buffer = IOBuffer()
 
-m_cpu = Flux.cpu(m)
+m_cpu = Flux.cpu(model.m)
 for (layer_idx, layer) in enumerate(m_cpu.layers)
     for (I, v) in pairs(IndexCartesian(), layer.W)
         println(weight_buffer, "w($(layer_idx - 1), $(I[2] - 1), $(I[1] - 1)) = $v;")
@@ -94,10 +109,10 @@ weights = String(take!(weight_buffer));
 biases = String(take!(bias_buffer));
 layer_nls = String(take!(nls_buffer));
 
-layer_sizes = vcat([size(layer.W, 2) for layer in m.layers], [size(last(m.layers).W, 1)])
+layer_sizes = vcat([size(layer.W, 2) for layer in m_cpu.layers], [size(last(m_cpu.layers).W, 1)])
 layer_sizes_str = join(layer_sizes, ", ")
 
-faust_nn = """
+nn = """
 layerSizes = $layer_sizes_str;
 
 // w(layer, node_from, node_to)
@@ -121,13 +136,15 @@ $layer_nls
 faust_code = """
 import("stdfaust.lib");
 
-$faust_nn
+$nn
 
 notes = par(i, 12, _ * (1/12) * os.osc(ba.midikey2hz(60 + i))) :> _;
 process = checkbox("2"), checkbox("1") : nn : notes <: _, _;
 """;
+faust_code
+end
 
-program_name = "faust_nn"
+function compile_faust(faust_code, program_name = "faust_nn")
 dsp_fname = "$program_name.dsp"
 io = open(dsp_fname, "w")
 write(io, faust_code)
@@ -141,3 +158,6 @@ cd(() -> (
 ), faust_path)   
 
 run(`bash.exe -c "/mnt/c/Users/coraj/Documents/faust_nn/$program_name hum_pred.wav"`, wait=true)
+
+end
+end

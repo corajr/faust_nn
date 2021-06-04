@@ -2,3 +2,13 @@ name = "faust_nn"
 uuid = "a38e281c-adda-4243-95a8-23461931beb1"
 authors = ["Cora Johnson-Roberson <cora.johnson.roberson@gmail.com>"]
 version = "0.1.0"
+
+[deps]
+BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+DSP = "717857b8-e6f2-59f4-9121-6e50c889abd2"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+IterTools = "c8e1da08-722c-5040-9ed9-7db0dc04731e"
+LibSndFile = "b13ce0c6-77b0-50c6-a2db-140568b8d1a5"
