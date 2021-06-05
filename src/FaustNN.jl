@@ -76,12 +76,12 @@ function evalcb()
     throttled_cb(loss_total)
     if i % checkpoint_period == 0
         m_cpu = Flux.cpu(model.m)
-        BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt loss_total
+        BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt = model.opt loss_total
     end
     i += 1
 end
 
-d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4)
+d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4, shuffle = true)
 Flux.@epochs 1000 Flux.train!(model.loss, model.ps, IterTools.ncycle(d_batch, 100), model.opt, cb = evalcb)
 println("loss: $(model.loss(model.xs, model.ys))")
 end
@@ -141,13 +141,14 @@ $layer_nls
 };
 """;
 
+input = "hslider(\"in\", 0, 0, 1, 1/12);"
 faust_code = """
 import("stdfaust.lib");
 
 $nn
 
 notes = par(i, 12, _ * (1/12) * os.osc(ba.midikey2hz(60 + i))) :> _;
-process = checkbox("2"), checkbox("1") : nn : notes <: _, _;
+process = $input : nn : notes <: _, _;
 """;
 faust_code
 end
