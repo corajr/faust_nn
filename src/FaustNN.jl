@@ -1,5 +1,7 @@
 module FaustNN
 
+export Model, chord_model, train_model, gen_faust_code, compile_faust
+
 import BSON
 import CUDA
 import Dates
@@ -8,6 +10,7 @@ import FFTW
 import FileIO
 import Flux
 import IterTools
+import LinearAlgebra
 # try
 #     import LibSndFile
 # catch e
@@ -38,18 +41,27 @@ mutable struct Model
 end
 
 function chord_model()
-xs = reduce(hcat, [[i / 12] for i in 0:11]) |> Flux.gpu
-
-#        0  1  2  3  4  5  6  7  8  9  t  e
-major = [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0]
-
-ys = reduce(hcat, [circshift(major, 7*i) for i in 0:11]) |> Flux.gpu
-
-h = 12
-m = Flux.Chain(
-	Flux.Dense(1, h, Flux.σ),
-	Flux.Dense(h, 12, Flux.σ),
+# xs = reduce(hcat, [[i / 12] for i in 0:11]) |> Flux.gpu
+xs = hcat(
+    zeros(12),
+    Matrix{Float32}(LinearAlgebra.I, 12, 12)
 ) |> Flux.gpu
+
+#                                 0  1  2  3  4  5  6  7  8  9  t  e
+major = convert(Vector{Float32}, [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0])
+
+ys = hcat(
+    zeros(12),
+    reduce(hcat, [circshift(major, 7*i) for i in 0:11]),
+) |> Flux.gpu
+
+layer_sizes = 12, 12
+layers = collect(zip(layer_sizes, Iterators.drop(layer_sizes, 1)))
+activation = Flux.σ
+m = Flux.Chain([
+    Flux.Dense(i, o, activation)
+    for (i, o) in layers
+]...)|> Flux.gpu
 
 loss(x, y) = Flux.mse(m(x), y)
 ps = Flux.params(m)
@@ -88,6 +100,7 @@ end
 
 faust_nls = Dict(
     :tanh => "ma.tanh",
+    :sin => "sin",
     :relu => "\\(x).(x * (x > 0))",
     :σ => "\\(x).(1.0 / (1.0 + exp(-x)))",
 )
@@ -141,7 +154,10 @@ $layer_nls
 };
 """;
 
-input = "hslider(\"in\", 0, 0, 1, 1/12);"
+input_type = "checkbox(\"%2i\")"
+# input_type = "hslider(\"%2i\", 0, 0, 1, 1/$(layer_sizes[1]))"
+input = "par(i, $(layer_sizes[1]), $input_type)"
+
 faust_code = """
 import("stdfaust.lib");
 
