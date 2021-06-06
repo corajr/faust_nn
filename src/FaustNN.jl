@@ -41,26 +41,25 @@ mutable struct Model
 end
 
 function chord_model()
-# xs = reduce(hcat, [[i / 12] for i in 0:11]) |> Flux.gpu
 xs = hcat(
-    zeros(12),
-    Matrix{Float32}(LinearAlgebra.I, 12, 12)
-) |> Flux.gpu
+    reduce(hcat, [[i / 12, 0] for i in 0:11]),
+    reduce(hcat, [[i / 12, 1] for i in 0:11]),
+ ) |> Flux.gpu
 
 #                                 0  1  2  3  4  5  6  7  8  9  t  e
 major = convert(Vector{Float32}, [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0])
+minor = convert(Vector{Float32}, [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0])
 
 ys = hcat(
-    zeros(12),
-    reduce(hcat, [circshift(major, 7*i) for i in 0:11]),
+    reduce(hcat, [circshift(minor, 7*i) for i in 0:11]),
 ) |> Flux.gpu
 
-layer_sizes = 12, 12
+layer_sizes = 2, 12, 128
 layers = collect(zip(layer_sizes, Iterators.drop(layer_sizes, 1)))
-activation = Flux.σ
+activations = [Flux.tanh, Flux.σ]
 m = Flux.Chain([
-    Flux.Dense(i, o, activation)
-    for (i, o) in layers
+    Flux.Dense(i, o, σ)
+    for ((i, o), σ) in zip(layers, activations)
 ]...)|> Flux.gpu
 
 loss(x, y) = Flux.mse(m(x), y)
@@ -90,10 +89,11 @@ function evalcb()
         m_cpu = Flux.cpu(model.m)
         BSON.@save "checkpoints/model-$run_started-$(lpad(i,3,'0')).bson" m_cpu opt = model.opt loss_total
     end
+    loss_total < 1f-5 && Flux.stop()
     i += 1
 end
 
-d_batch = Flux.Data.DataLoader((model.xs, model.ys), batchsize = 4, shuffle = true)
+d_batch = Flux.Data.DataLoader((model.xs, model.ys), shuffle = true)
 Flux.@epochs 1000 Flux.train!(model.loss, model.ps, IterTools.ncycle(d_batch, 100), model.opt, cb = evalcb)
 println("loss: $(model.loss(model.xs, model.ys))")
 end
@@ -154,8 +154,8 @@ $layer_nls
 };
 """;
 
-input_type = "checkbox(\"%2i\")"
-# input_type = "hslider(\"%2i\", 0, 0, 1, 1/$(layer_sizes[1]))"
+# input_type = "checkbox(\"%2i\")"
+input_type = "hslider(\"%2i\", 0, 0, 1, 1/12)"
 input = "par(i, $(layer_sizes[1]), $input_type)"
 
 faust_code = """

@@ -562,6 +562,12 @@ version = "0.2.4"
 [[Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
+[[MIDI]]
+deps = ["FileIO"]
+git-tree-sha1 = "bc3f61c6c94dfae6a8b4656797d0ca5688c001fb"
+uuid = "f57c4921-e30c-5f49-b073-3f2f2ada663e"
+version = "1.12.5"
+
 [[MKL_jll]]
 deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "Pkg"]
 git-tree-sha1 = "c253236b0ed414624b083e6b72bfe891fbd2c7af"
