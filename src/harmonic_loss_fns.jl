@@ -1,4 +1,8 @@
 # harmonic_loss_fns.jl
+export mag_spec, harmonic_loss
+
+import DSP
+import FFTW
 
 """
     lags(x, n, t)
@@ -26,21 +30,17 @@ If `n` is not given, it defaults to 256.
 
 # Examples
 ```julia-repl
-julia> Plots.heatmap(log1p.(mag_spec(x)'))
+julia> x = rand(256, 1); Plots.heatmap(log1p.(mag_spec(x)'))
 ```
 """
 function mag_spec(x, n = 256)
     hann = DSP.Windows.hanning(n, zerophase=true)
     hop_size = div(n, 2)
-    n_pos_freqs = div(n, 2) + 1
-    n_hops = div(size(x, 1), hop_size)
-    spec = zeros(n_hops, n_pos_freqs)
-    for i=1:n_hops
-        offset = ((i - 1) * hop_size) + 1
-        windowed = x[offset:offset+n-1] .* hann
-        spec[i, :] = abs.(FFTW.rfft(windowed))
-    end
-    spec
+    n_windows = div(size(x, 1), n)
+    reduce(hcat, [
+        abs.(FFTW.rfft(x[offset:offset+n-1] .* hann))
+        for offset in 1:hop_size:(n_windows*n)
+    ])
 end
 
 """
