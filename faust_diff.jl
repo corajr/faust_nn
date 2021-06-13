@@ -12,10 +12,10 @@ samplerate = 16000
 process = Faust.compile("""
 import("stdfaust.lib");
 
-freq = hslider("freq", 0.0, 0.0, 1.0, 0.001);
-Q = hslider("Q", 0.0, 0.0, 1.0, 0.001);
+freq = 10 ^ hslider("freq", 0.0, 0.0, 1.0, 0.001);
+Q = 10 ^ hslider("Q", 0.0, 0.0, 1.0, 0.001);
 gain = hslider("gain", 0.0, 0.0, 1.0, 0.001);
-process = fi.resonbp(220.0 * (1+freq), 10 ^ (1+Q), gain);
+process = fi.resonbp(freq, Q, gain);
 """)
 
 function f(x::Vector{Float32}, params::Vector{Float32})
