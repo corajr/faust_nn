@@ -1,5 +1,5 @@
-# harmonic_loss_fns.jl
-export mag_spec, harmonic_loss
+# spectral_loss_fns.jl
+export mag_spec, spectral_loss
 
 import DSP
 import FFTW
@@ -54,10 +54,10 @@ function mag_spec(x; n=256, hop_size=128, window=hann)
 end
 
 """
-    harmonic_loss(x, x̂)
+    spectral_loss(x, x̂)
 
-Computes the MSE difference between two signals.
+Computes the MSE difference between two signals in the frequency domain.
 """
-function harmonic_loss(x, x̂)
+function spectral_loss(x, x̂)
     Flux.mse(mag_spec(x), mag_spec(x̂))
 end

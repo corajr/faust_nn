@@ -17,7 +17,7 @@ import LinearAlgebra
 #     # ignore double registration of OGG format.
 # end
 
-include("harmonic_loss_fns.jl")
+include("spectral_loss_fns.jl")
 
 # n_fft = 256
 # audio = FileIO.load("hum.wav")

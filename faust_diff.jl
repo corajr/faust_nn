@@ -8,76 +8,82 @@ import PortAudio
 import Zygote
 
 block_size = 2048
-samplerate = 16000
+samplerate = 44100
 
-src = """
+params_src = """
 import("stdfaust.lib");
 
-freq = 10 ^ hslider("freq", 0.0, 0.0, 1.0, 0.001);
-Q = 10 ^ hslider("Q", 0.0, 0.0, 1.0, 0.001);
+freq = 10 ^ hslider("log10_freq", log10(110), log10(110), log10(880), 0.001);
+Q = 10 ^ hslider("log10_Q", 1, 1, 3, 0.001);
 gain = hslider("gain", 0.0, 0.0, 1.0, 0.001);
-process = fi.resonbp(freq, Q, gain);
 """
+
+src = string(params_src, """
+process = fi.resonbp(freq, Q, gain);
+""")
+stereo_src = string(params_src, """
+process = sp.stereoize(fi.resonbp(freq, Q, gain));
+""")
 process = Faust.compile(src)
 
-function set_params(d::Faust.DSPBlock, p::Vector{Float32})
-    unsafe_store!(d.ui.paths["/score/freq"], p[1])
-    unsafe_store!(d.ui.paths["/score/Q"], p[2])
-    unsafe_store!(d.ui.paths["/score/gain"], p[3])
+function get_param_names(d::Faust.DSPBlock)
+    sort(collect(keys(d.ui.ranges)))
 end
 
-function f(x::Vector{Float32}, params::Vector{Float32})
+function f(x::Vector{T}, params::Vector{T}, param_names::Vector{String}) where T <: Faust.FaustFloat
     Zygote.ignore() do
-        Faust.init(process, block_size=block_size, samplerate=samplerate)
+        Faust.init!(process, block_size=block_size, samplerate=samplerate)
         process.inputs = reshape(x, block_size, 1)
-        set_params(process, params)
-        vec(Faust.compute(process))
+        Faust.setparams!(process, Dict(zip(param_names, params)))
+        vec(Faust.compute!(process))
     end
 end
 
-function f(x::Matrix{Float32}, params::Vector{Float32})
-    mapslices(v -> f(v, params), x, dims=[1])
+function f(x::Matrix{T}, params::Vector{T}, param_names::Vector{String}) where T <: Faust.FaustFloat
+    mapslices(v -> f(v, params, param_names), x, dims=[1])
 end
 
-struct FaustLayer
-    params::Vector{Float32}
+struct FaustLayer{T <: Faust.FaustFloat}
+    params::Vector{T}
+    param_names::Vector{String}
 end
 
-function FaustLayer(in::Integer; init = in -> rand(Float32, in))
-    return FaustLayer(init(in))
+function FaustLayer(d::Faust.DSPBlock{T}) where T <: Faust.FaustFloat
+    Faust.init!(d)
+    param_names = get_param_names(d)
+    params = zeros(T, length(param_names))
+    for (i, k) in enumerate(param_names)
+        r = d.ui.ranges[k]
+        params[i] = (r.max - r.min) * rand(T) + r.min
+    end
+    return FaustLayer(params, param_names)
 end
 
 function (m::FaustLayer)(x)
-    f(x, m.params)
+    f(x, m.params, m.param_names)
 end
 
 Flux.@functor FaustLayer
 
-Zygote.@adjoint f(x, p) = f(x, p), ȳ -> (
+Zygote.@adjoint f(x, p, names) = f(x, p, names), ȳ -> (
     nothing,
-    FiniteDifferences.j′vp(FiniteDifferences.central_fdm(5, 1), p -> f(x, p), ȳ, p)[1],
+    FiniteDifferences.j′vp(FiniteDifferences.central_fdm(5, 1), p -> f(x, p, names), ȳ, p)[1],
+    nothing,
 )
 Zygote.refresh()
 
-model = FaustLayer(3)
+model = FaustLayer(Faust.compile(src))
 ps = Flux.params(model)
-# loss(x, y) = FaustNN.harmonic_loss(model(x), y)
-loss(x, y) = Flux.mse(model(x), y)
-
-original_param = [0.5f0, 0.1f0, 0.5f0]
-xs = 2 * rand(Float32, block_size, 50) .- 1
-ys = mapslices(x -> f(x, original_param), xs, dims=[1])
+loss(x, y) = FaustNN.spectral_loss(model(x), y)
 
 opt = Flux.ADAM()
 i = 0
 
-c = Channel(0)
-put!(c, model.params)
+c = Channel(1)
 
 function display_loss(loss_total)
-    global i
     Flux.@show((i, loss_total))
-    put!(c, model.params)
+    put!(c, model)
 end
 throttled_cb = Flux.throttle(display_loss, 5)
 
@@ -88,22 +94,37 @@ function evalcb()
     i += 1
 end
 
-function play(c::Channel)
-    d = Faust.compile(src)
-    PortAudio.PortAudioStream(1, 1) do stream
-        Faust.init(d, block_size=block_size, samplerate=Int(stream.samplerate))
+
+# TODO: try spawning a separate process and controlling with OSC.
+function play(c; in=2, out=2)
+    d = Faust.compile(stereo_src)
+    PortAudio.PortAudioStream(in, out) do stream
+        if d.dsp == C_NULL
+            println(stream.samplerate)
+            Faust.init!(d, block_size=block_size, samplerate=Int(stream.samplerate))
+        end
+        block = 0
         while true
-            if isready(c)
-                params = take!(c)
-                set_params(d, params)
+            if block % 16 == 0 && isready(c)
+                model = take!(c)
+                Faust.setparams!(d, Dict(zip(model.param_names, model.params)))
             end
             d.inputs = convert(Matrix{Float32}, read(stream, block_size))
-            write(stream, Faust.compute(d))
+            write(stream, Faust.compute!(d))
+            block = block + 1
         end
     end
 end
 
-t = @task play(c)
+devices = PortAudio.devices()
+println(devices)
+dev = filter(x -> x.maxinchans == 2 && x.maxoutchans == 2, devices)[1]
 
+t = Threads.@spawn play(c; in=dev, out=dev)
+
+original_param = [log10(440f0), 2f0, 0.5f0]
+xs = 2 * rand(Float32, block_size, 50) .- 1
+ys = f(xs, original_param, model.param_names)
 d_batch = Flux.Data.DataLoader((xs, ys), batchsize=50)
+
 Flux.@epochs 20 Flux.train!(loss, ps, IterTools.ncycle(d_batch, 50), opt, cb = evalcb)
