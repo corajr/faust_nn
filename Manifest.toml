@@ -247,9 +247,7 @@ version = "1.3.3+2"
 
 [[Faust]]
 deps = ["faust_jll"]
-git-tree-sha1 = "e660cffbc79ae4a31179d3df65636dfff4aea814"
-repo-rev = "main"
-repo-url = "/home/quartz/Documents/Faust.jl"
+path = "/home/corajr/Documents/Faust.jl"
 uuid = "b0df9959-3f7b-4e37-9fbf-63cb195e8303"
 version = "0.1.0"
 
