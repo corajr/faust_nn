@@ -6,6 +6,7 @@ import BSON
 import CUDA
 import Dates
 import DSP
+import Faust
 import FFTW
 import FileIO
 import Flux
@@ -18,16 +19,6 @@ import LinearAlgebra
 # end
 
 include("spectral_loss_fns.jl")
-
-# n_fft = 256
-# audio = FileIO.load("hum.wav")
-# spec = mag_spec(audio, n_fft)
-
-# ts = ((1:size(spec, 1)) * div(n_fft, 2)) / audio.samplerate
-# n_fs = 12
-# midikey2hz(mk) = 440.0 * 2^((mk-69.0)/12.0);
-# fs = midikey2hz.(60:60+n_fs-1)
-# oscillators = [sum(sin.(2*pi*fs*t)) for t in ts]
 
 CUDA.allowscalar(false)
 
@@ -51,10 +42,11 @@ major = convert(Vector{Float32}, [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0])
 minor = convert(Vector{Float32}, [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0])
 
 ys = hcat(
+    reduce(hcat, [circshift(major, 7*i) for i in 0:11]),
     reduce(hcat, [circshift(minor, 7*i) for i in 0:11]),
 ) |> Flux.gpu
 
-layer_sizes = 2, 12, 128
+layer_sizes = 2, 12, 12
 layers = collect(zip(layer_sizes, Iterators.drop(layer_sizes, 1)))
 activations = [Flux.tanh, Flux.σ]
 m = Flux.Chain([
@@ -169,20 +161,4 @@ process = $input : nn : notes <: _, _;
 faust_code
 end
 
-function compile_faust(faust_code, program_name = "faust_nn")
-dsp_fname = "$program_name.dsp"
-io = open(dsp_fname, "w")
-write(io, faust_code)
-close(io)
-
-dsp_path = Base.Filesystem.abspath(dsp_fname)
-faust_path = "C:\\Program Files\\Faust\\bin"
-cd(() -> (
-    # println(readdir("."));
-    run(`bash.exe -c faust2sndfile $dsp_path`);
-), faust_path)   
-
-run(`bash.exe -c "/mnt/c/Users/coraj/Documents/faust_nn/$program_name hum_pred.wav"`, wait=true)
-
-end
 end
