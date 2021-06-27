@@ -1,5 +1,6 @@
 export FaustLayer
 
+import ChainRulesCore
 import Faust
 import FiniteDifferences
 import Flux
@@ -47,12 +48,20 @@ function f(process::Faust.DSPBlock{T}, x::Matrix{T}, params::Vector{T}, param_na
     mapslices(v -> f(process, v, params, param_names), x, dims=[1])
 end
 
-Zygote.@adjoint f(process, x, p, p_names) = f(process, x, p, p_names), ȳ -> (
-    nothing, # can't directly differentiate over the code (...yet 😈)
-    nothing, # inputs are fixed
-    FiniteDifferences.j′vp(FiniteDifferences.central_fdm(5, 1), p -> f(process, x, p, p_names), ȳ, p)[1],
-    nothing, # param names irrelevant
-)
+function ChainRulesCore.rrule(::typeof(f), process, x, p, p_names)
+    y = f(process, x, p, p_names)
+    function f_pullback(ȳ)
+        # Cheat using finite differences for now.
+        ∂x = ChainRulesCore.@thunk begin
+            FiniteDifferences.j′vp(FiniteDifferences.central_fdm(5, 1), x -> f(process, x, p, p_names), ȳ, x)[1]
+        end
+        ∂p = ChainRulesCore.@thunk begin
+            FiniteDifferences.j′vp(FiniteDifferences.central_fdm(5, 1), p -> f(process, x, p, p_names), ȳ, p)[1]
+        end
+        return ChainRulesCore.NoTangent(), ChainRulesCore.NoTangent(), ∂x, ∂p, ChainRulesCore.NoTangent()
+    end
+    return y, f_pullback
+end
 
 function (m::FaustLayer{T})(x) where T <: Faust.FaustFloat
     f(m.process, x, m.params, m.param_names)
